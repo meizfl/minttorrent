@@ -1,0 +1,25 @@
+[Unit]
+Description=MintTorrent userspace VPN BitTorrent server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=minttorrent
+Group=minttorrent
+WorkingDirectory=/var/lib/minttorrent
+Environment=MINTTORRENT_PROFILE=/var/lib/minttorrent/profile
+Environment=MINTTORRENT_CONFIG=/etc/minttorrent/config.toml
+ExecStart=/opt/MintTorrent/bin/minttorrent run
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=60
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/minttorrent /var/log/minttorrent
+
+[Install]
+WantedBy=multi-user.target

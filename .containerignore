@@ -1,0 +1,16 @@
+.git
+.agents
+.aws
+.codex
+build
+target
+dist
+data
+logs
+*.torrent
+*.conf
+
+go
+github
+github-releases
+__pycache__

@@ -1,0 +1,8 @@
+{
+  "components/amneziawg-go/outline/fallback_test.go": "56cd48132c51dd9b3a4154f441268810bd0481f6adc8fcd8b7af2203a56fb6bc",
+  "components/amneziawg-go/tests/netns.sh": "2ff3d5c34b062721c9d06430c1921d5e3cc677946dba4ab671ecac17a217f60e",
+  "vendor/libtorrent/test/ssl/invalid_peer_private_key.pem": "6437fcdf8dee2f0d69069586cce749743bbbfb137cff79fd5ecc051c94bd3378",
+  "vendor/libtorrent/test/ssl/peer_private_key.pem": "504f1488f266a8a4cda15d04d0f76046149dcf16d17b2bb07e898e8b34bb96b8",
+  "vendor/libtorrent/test/ssl/root_ca_private.pem": "336e08ffc8ffeca59d744b96c658a4d46d31b20d3a123681f1889fad7a22a594",
+  "vendor/libtorrent/test/ssl/server.pem": "bd5c060c9001aaf04c87561a23e1f261529adb06f1421dc1b3f4918f340a9df7"
+}

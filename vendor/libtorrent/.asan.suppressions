@@ -1,0 +1,3 @@
+# Specific suppressions for libdatachannel/libtorrent context
+leak:rtc::impl::DtlsTransport::DtlsTransport
+leak:SSL_CTX_new_ex

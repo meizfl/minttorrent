@@ -1,0 +1,11 @@
+# Example only. Replace placeholders locally; never commit an active profile.
+[Interface]
+PrivateKey = <YOUR_PRIVATE_KEY>
+Address = <YOUR_TUNNEL_ADDRESS>
+DNS = <YOUR_TUNNEL_DNS>
+
+[Peer]
+PublicKey = <YOUR_PROVIDER_PUBLIC_KEY>
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = <YOUR_VPN_IP>:<YOUR_VPN_PORT>
+PersistentKeepalive = 25

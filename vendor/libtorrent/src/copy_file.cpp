@@ -1,0 +1,679 @@
+/*
+
+Copyright (c) 2022, Arvid Norberg
+All rights reserved.
+
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
+*/
+
+#include "libtorrent/config.hpp"
+
+#include "libtorrent/error_code.hpp"
+#include "libtorrent/aux_/file.hpp"
+#include "libtorrent/aux_/path.hpp"
+#include "libtorrent/aux_/storage_utils.hpp"
+
+#ifdef TORRENT_WINDOWS
+// windows part
+#include "libtorrent/aux_/windows.hpp"
+#include "libtorrent/aux_/win_file_handle.hpp"
+
+#include <algorithm>
+#else
+
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
+#include "libtorrent/aux_/file_descriptor.hpp"
+
+#include <unistd.h>
+#include <sys/stat.h>
+#include <algorithm>
+#include <vector>
+
+#if TORRENT_HAS_COPYFILE
+#include <copyfile.h>
+#endif
+
+#ifdef TORRENT_LINUX
+#include <sys/ioctl.h>
+#include <linux/fs.h> // for FS_IOC_FIEMAP
+#include <linux/fiemap.h>
+#include <array>
+#include <limits>
+#endif
+
+#endif
+
+namespace libtorrent {
+namespace aux {
+
+#ifdef TORRENT_WINDOWS
+namespace {
+
+// returns true if the given file has any regions that are
+// sparse, i.e. not allocated. This is similar to calling lseek(SEEK_DATA) and
+// lseek(SEEK_HOLE)
+std::pair<std::int64_t, std::int64_t> next_allocated_region(HANDLE file
+	, std::int64_t const offset
+	, std::int64_t file_size
+	, error_code& ec)
+{
+#ifndef FSCTL_QUERY_ALLOCATED_RANGES
+	typedef struct _FILE_ALLOCATED_RANGE_BUFFER {
+		LARGE_INTEGER FileOffset;
+		LARGE_INTEGER Length;
+	} FILE_ALLOCATED_RANGE_BUFFER;
+#define FSCTL_QUERY_ALLOCATED_RANGES ((0x9 << 16) | (1 << 14) | (51 << 2) | 3)
+#endif
+	FILE_ALLOCATED_RANGE_BUFFER in;
+	in.FileOffset.QuadPart = offset;
+	in.Length.QuadPart = file_size - offset;
+
+	FILE_ALLOCATED_RANGE_BUFFER out;
+
+	DWORD returned_bytes = 0;
+	BOOL const ret = DeviceIoControl(file, FSCTL_QUERY_ALLOCATED_RANGES
+		, static_cast<void*>(&in), sizeof(in)
+		, &out, sizeof(out), &returned_bytes, nullptr);
+
+	if (ret == FALSE)
+	{
+		int const error = ::GetLastError();
+		// we expect this error, since we just ask for one allocated range at a
+		// time.
+		if (error != ERROR_MORE_DATA)
+		{
+			ec.assign(error, system_category());
+			return {0, 0};
+		}
+	}
+
+	if (returned_bytes != sizeof(out)) {
+		return {file_size, file_size};
+	}
+
+	return {out.FileOffset.QuadPart, out.FileOffset.QuadPart + out.Length.QuadPart};
+}
+
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0602
+// FILE_STORAGE_INFO and the FileStorageInfo enumerator require the Windows 8
+// SDK. Define them locally so this builds against older _WIN32_WINNT
+// targets. GetFileInformationByHandleEx() itself has existed since Vista;
+// on pre-Windows-8 systems it simply fails this particular query, which
+// pick_buffer_size() already falls back on.
+struct FILE_STORAGE_INFO
+{
+	ULONG LogicalBytesPerSector;
+	ULONG PhysicalBytesPerSectorForAtomicity;
+	ULONG PhysicalBytesPerSectorForPerformance;
+	ULONG FileSystemEffectivePhysicalBytesPerSectorForAtomicity;
+	ULONG Flags;
+	ULONG ByteOffsetForSectorAlignment;
+	ULONG ByteOffsetForPartitionAlignment;
+};
+int constexpr FileStorageInfo = 16;
+#endif
+
+// scales with the destination volume's physical sector size, mirroring the
+// POSIX fallback's use of st_blksize. FileStorageInfo is only available on
+// Windows 8 and later; querying it simply fails (returning false) on
+// older systems, in which case we fall back to min_size
+std::size_t pick_buffer_size(HANDLE const out_handle)
+{
+	std::size_t const min_size = 64 * 1024;
+	std::size_t const max_size = 16 * 1024 * 1024;
+
+	FILE_STORAGE_INFO info;
+	if (!GetFileInformationByHandleEx(out_handle,
+			static_cast<FILE_INFO_BY_HANDLE_CLASS>(FileStorageInfo),
+			&info,
+			sizeof(info)))
+		return min_size;
+
+	return std::clamp(
+		std::size_t(info.PhysicalBytesPerSectorForPerformance) * 64, min_size, max_size);
+}
+
+void copy_range(HANDLE const in_handle,
+	HANDLE const out_handle,
+	std::int64_t in_offset,
+	std::int64_t len,
+	copy_file_buffer& buf,
+	storage_error& se)
+{
+	if (buf.buffer.empty())
+	{
+		try
+		{
+			buf.buffer.resize(pick_buffer_size(out_handle));
+		}
+		catch (std::bad_alloc const&)
+		{
+			se.operation = operation_t::file_copy;
+			se.ec = errors::no_memory;
+			return;
+		}
+	}
+
+	while (len > 0)
+	{
+		OVERLAPPED in_ol{};
+		in_ol.Offset = in_offset & 0xffffffff;
+		in_ol.OffsetHigh = in_offset >> 32;
+		DWORD num_read = 0;
+		if (ReadFile(in_handle,
+				buf.buffer.data(),
+				DWORD(std::min(len, std::int64_t(buf.buffer.size()))),
+				&num_read,
+				&in_ol)
+			== 0)
+		{
+			int const error = ::GetLastError();
+			se.operation = operation_t::file_read;
+			if (error == ERROR_HANDLE_EOF)
+			{
+				se.ec = errors::file_too_short;
+				return;
+			}
+
+			se.ec.assign(error, system_category());
+			return;
+		}
+
+		len -= num_read;
+		error_code write_error;
+		int const num_written = pwrite_all(
+			out_handle, span<char const>(buf.buffer.data(), num_read), in_offset, write_error);
+		if (write_error)
+		{
+			se.operation = operation_t::file_write;
+			se.ec = write_error;
+			return;
+		}
+		TORRENT_ASSERT(num_written == int(num_read));
+		in_offset += num_written;
+	}
+	return;
+}
+
+} // anonymous namespace
+
+void copy_file(
+	std::string const& inf, std::string const& newf, storage_error& se, copy_file_buffer& buf)
+{
+	se.ec.clear();
+	native_path_string f1 = convert_to_native_path_string(inf);
+	native_path_string f2 = convert_to_native_path_string(newf);
+
+	WIN32_FILE_ATTRIBUTE_DATA in_stat;
+	if (!GetFileAttributesExW(f1.c_str(), GetFileExInfoStandard, &in_stat))
+	{
+		se.ec.assign(GetLastError(), system_category());
+		se.operation = operation_t::file_stat;
+		return;
+	}
+
+	if ((in_stat.dwFileAttributes & FILE_ATTRIBUTE_SPARSE_FILE) == 0)
+	{
+		// if the input file is not sparse, use the system copy function
+		if (CopyFileW(f1.c_str(), f2.c_str(), false) == 0)
+		{
+			se.operation = operation_t::file_copy;
+			se.ec.assign(GetLastError(), system_category());
+		}
+		return;
+	}
+
+	std::int64_t const in_size = (std::int64_t(in_stat.nFileSizeHigh) << 32)
+		| in_stat.nFileSizeLow;
+
+#ifdef TORRENT_WINRT
+	aux::win_file_handle in_handle = ::CreateFile2(f1.c_str()
+			, GENERIC_READ
+			, FILE_SHARE_READ
+			, OPEN_EXISTING
+			, nullptr);
+#else
+	aux::win_file_handle in_handle = ::CreateFileW(f1.c_str()
+			, GENERIC_READ
+			, FILE_SHARE_READ
+			, nullptr
+			, OPEN_EXISTING
+			, FILE_FLAG_SEQUENTIAL_SCAN
+			, nullptr);
+#endif
+	if (in_handle.handle() == INVALID_HANDLE_VALUE)
+	{
+		se.operation = operation_t::file_open;
+		se.ec.assign(GetLastError(), system_category());
+		return;
+	}
+
+#ifdef TORRENT_WINRT
+	aux::win_file_handle out_handle =
+		::CreateFile2(f2.c_str(), GENERIC_WRITE, FILE_SHARE_WRITE, CREATE_ALWAYS, nullptr);
+#else
+	aux::win_file_handle out_handle = ::CreateFileW(f2.c_str(),
+		GENERIC_WRITE,
+		FILE_SHARE_WRITE,
+		nullptr,
+		CREATE_ALWAYS,
+		FILE_FLAG_WRITE_THROUGH,
+		nullptr);
+#endif
+	if (out_handle.handle() == INVALID_HANDLE_VALUE)
+	{
+		se.operation = operation_t::file_open;
+		se.ec.assign(GetLastError(), system_category());
+		return;
+	}
+
+	DWORD temp;
+	if (::DeviceIoControl(out_handle.handle(), FSCTL_SET_SPARSE
+		, nullptr, 0, nullptr, 0, &temp, nullptr) == 0)
+	{
+		se.operation = operation_t::iocontrol;
+		se.ec.assign(GetLastError(), system_category());
+		return;
+	}
+
+	LARGE_INTEGER size;
+	size.QuadPart = in_size;
+	if (::SetFilePointerEx(out_handle.handle(), size, nullptr, FILE_BEGIN) == FALSE)
+	{
+		se.operation = operation_t::file_seek;
+		se.ec.assign(GetLastError(), system_category());
+		return;
+	}
+
+	if (::SetEndOfFile(out_handle.handle()) == FALSE)
+	{
+		se.operation = operation_t::file_truncate;
+		se.ec.assign(GetLastError(), system_category());
+		return;
+	}
+
+	std::pair<std::int64_t, std::int64_t> data(0, 0);
+	for (;;)
+	{
+		data = next_allocated_region(in_handle.handle(), data.second, in_size, se.ec);
+		if (se.ec)
+		{
+			se.operation = operation_t::iocontrol;
+			return;
+		}
+
+		copy_range(
+			in_handle.handle(), out_handle.handle(), data.first, data.second - data.first, buf, se);
+		if (se) return;
+		// There's a possible time-of-check-time-of-use race here.
+		// The source file may have grown during the copy operation, in which
+		// case data.second may exceed the initial size
+		if (data.second >= in_size) return;
+	}
+}
+
+#else
+// Generic/linux implementation
+
+namespace {
+
+struct copy_range_mode
+{
+	bool use_fallback = false;
+};
+
+// scales with the destination's reported block size to limit read/write
+// round-trips on high-latency, high-throughput drives and network filesystems
+std::size_t pick_buffer_size(int const fd_out)
+{
+	std::size_t const min_size = 64 * 1024;
+	std::size_t const max_size = 16 * 1024 * 1024;
+
+	struct stat st
+	{};
+	if (::fstat(fd_out, &st) != 0 || st.st_blksize <= 0)
+		return min_size;
+
+	return std::clamp(std::size_t(st.st_blksize) * 64, min_size, max_size);
+}
+
+std::int64_t copy_range_fallback(int const fd_in,
+	int const fd_out,
+	off_t in_offset,
+	std::int64_t len,
+	copy_file_buffer& buf,
+	storage_error& se)
+{
+	if (buf.buffer.empty())
+	{
+		try
+		{
+			buf.buffer.resize(pick_buffer_size(fd_out));
+		}
+		catch (std::bad_alloc const&)
+		{
+			se.operation = operation_t::file_copy;
+			se.ec = errors::no_memory;
+			return -1;
+		}
+	}
+
+	std::int64_t total_copied = 0;
+	while (len > 0)
+	{
+		ssize_t const num_read = ::pread(fd_in,
+			buf.buffer.data(),
+			std::size_t(std::min(len, std::int64_t(buf.buffer.size()))),
+			in_offset);
+		if (num_read == 0)
+		{
+			se.operation = operation_t::file_read;
+			se.ec = errors::file_too_short;
+			return -1;
+		}
+		if (num_read < 0)
+		{
+			se.operation = operation_t::file_read;
+			se.ec.assign(errno, system_category());
+			return -1;
+		}
+		len -= num_read;
+
+		error_code write_error;
+		int const num_written = pwrite_all(
+			fd_out, span<char const>(buf.buffer.data(), num_read), in_offset, write_error);
+		if (write_error)
+		{
+			se.operation = operation_t::file_write;
+			se.ec = write_error;
+			return -1;
+		}
+		TORRENT_ASSERT(num_written == num_read);
+		in_offset += num_written;
+		total_copied += num_written;
+	}
+	return total_copied;
+}
+
+std::int64_t copy_range(int const fd_in,
+	int const fd_out,
+	off_t in_offset,
+	std::int64_t len,
+	copy_range_mode& m,
+	copy_file_buffer& buf,
+	storage_error& se)
+{
+#if TORRENT_HAS_COPY_FILE_RANGE
+	if (m.use_fallback)
+		return copy_range_fallback(fd_in, fd_out, in_offset, len, buf, se);
+
+	std::int64_t total_copied = 0;
+	off_t out_offset = in_offset;
+	ssize_t ret = 0;
+	do
+	{
+		ret = ::copy_file_range(fd_in, &in_offset
+			, fd_out, &out_offset, std::size_t(len), 0);
+		if (ret < 0)
+		{
+			int const err = errno;
+			if (err == EXDEV || err == ENOTSUP || err == ENOSYS)
+			{
+				m.use_fallback = true;
+				return copy_range_fallback(fd_in, fd_out, in_offset, len, buf, se);
+			}
+			se.operation = operation_t::file_copy;
+			se.ec.assign(err, system_category());
+			return -1;
+		}
+
+		if (ret == 0 && len > 0)
+		{
+			se.operation = operation_t::file_copy;
+			se.ec = errors::file_too_short;
+			return -1;
+		}
+
+		len -= ret;
+		total_copied += ret;
+	}
+	while (len > 0);
+	return total_copied;
+#else
+	TORRENT_UNUSED(m);
+	return copy_range_fallback(fd_in, fd_out, in_offset, len, buf, se);
+#endif
+}
+
+#ifdef TORRENT_LINUX
+// returns false if FIEMAP is not supported by fd_in's filesystem, leaving
+// the caller to fall back to another method. Otherwise copies the data
+// extents, skipping holes between them, and returns true (se is set on
+// error).
+bool copy_sparse_regions_fiemap(int const fd_in,
+	int const fd_out,
+	std::int64_t const file_size,
+	copy_range_mode& m,
+	copy_file_buffer& buf,
+	storage_error& se)
+{
+	// struct fiemap ends in a flexible array member, so it cannot be used
+	// as a non-final member of another struct. Mirror its fixed header
+	// fields here, immediately followed by the (fixed-size) extents array.
+	struct fiemap_request
+	{
+		std::uint64_t fm_start;
+		std::uint64_t fm_length;
+		std::uint32_t fm_flags;
+		std::uint32_t fm_mapped_extents;
+		std::uint32_t fm_extent_count;
+		std::uint32_t fm_reserved;
+		std::array<fiemap_extent, 32> fm_extents;
+	};
+	static_assert(sizeof(fiemap_request) == sizeof(fiemap) + 32 * sizeof(fiemap_extent),
+		"fiemap_request must exactly match the kernel's struct fiemap layout");
+	fiemap_request req{};
+
+	std::uint64_t start = 0;
+	for (;;)
+	{
+		std::uint64_t const loop_start = start;
+		req.fm_start = start;
+		req.fm_length = std::uint64_t(file_size) - start;
+		// only the first call needs to flush dirty pages before mapping
+		// extents. Subsequent calls observe a file whose content we
+		// haven't changed since, so nothing new could have become dirty.
+		req.fm_flags = (loop_start == 0) ? FIEMAP_FLAG_SYNC : 0;
+		req.fm_extent_count = std::uint32_t(req.fm_extents.size());
+
+		int ioctl_ret;
+		do
+		{
+			ioctl_ret = ::ioctl(fd_in, FS_IOC_FIEMAP, &req);
+		}
+		while (ioctl_ret < 0 && errno == EINTR);
+
+		if (ioctl_ret < 0)
+		{
+			int const err = errno;
+			if (start == 0 && (err == ENOTTY || err == EOPNOTSUPP || err == EINVAL))
+				return false;
+			se.operation = operation_t::iocontrol;
+			se.ec.assign(err, system_category());
+			return true;
+		}
+
+		if (req.fm_mapped_extents == 0)
+			return true;
+
+		bool last_extent = false;
+		for (std::uint32_t i = 0; i < req.fm_mapped_extents; ++i)
+		{
+			fiemap_extent const& e = req.fm_extents[i];
+			if (e.fe_length > std::uint64_t(std::numeric_limits<std::int64_t>::max())
+				|| e.fe_logical >= std::uint64_t(file_size))
+			{
+				se.operation = operation_t::iocontrol;
+				se.ec = make_error_code(boost::system::errc::bad_message);
+				return true;
+			}
+			// the last extent may extend past file_size, since filesystems
+			// can report the full trailing block even when the file ends
+			// partway through it
+			std::uint64_t const extent_len =
+				std::min(e.fe_length, std::uint64_t(file_size) - e.fe_logical);
+			if (copy_range(fd_in, fd_out, off_t(e.fe_logical), std::int64_t(extent_len), m, buf, se)
+				< 0)
+				return true;
+			start = e.fe_logical + extent_len;
+			if (e.fe_flags & FIEMAP_EXTENT_LAST)
+				last_extent = true;
+		}
+		if (last_extent || start >= std::uint64_t(file_size))
+			return true;
+
+		// guard against a filesystem reporting extents that never reach
+		// file_size or the LAST flag, which would otherwise loop forever
+		if (start <= loop_start)
+		{
+			se.operation = operation_t::iocontrol;
+			se.ec = make_error_code(boost::system::errc::bad_message);
+			return true;
+		}
+	}
+}
+#endif
+
+} // anonymous namespace
+
+void copy_file(
+	std::string const& inf, std::string const& newf, storage_error& se, copy_file_buffer& buf)
+{
+	se.ec.clear();
+	native_path_string f1 = convert_to_native_path_string(inf);
+	native_path_string f2 = convert_to_native_path_string(newf);
+
+	int read_flags = O_RDONLY;
+#ifdef O_CLOEXEC
+	read_flags |= O_CLOEXEC;
+#endif
+	aux::file_descriptor const infd = ::open(f1.c_str(), read_flags);
+	if (infd.fd() < 0)
+	{
+		se.operation = operation_t::file_stat;
+		se.ec.assign(errno, system_category());
+		return;
+	}
+
+	struct stat in_stat;
+	if (::fstat(infd.fd(), &in_stat) != 0)
+	{
+		se.operation = operation_t::file_stat;
+		se.ec.assign(errno, system_category());
+		return;
+	}
+
+	bool const input_is_sparse = in_stat.st_size > off_t(in_stat.st_blocks) * 512;
+
+	// if the source file is not sparse we'll end up copying every byte anyway,
+	// there's no point in passing O_TRUNC. However, in order to preserve sparse
+	// regions, we *do* need to truncate the output file.
+	int write_flags = O_RDWR | O_CREAT | (input_is_sparse ? O_TRUNC : 0);
+#ifdef O_CLOEXEC
+	write_flags |= O_CLOEXEC;
+#endif
+	aux::file_descriptor const outfd = ::open(f2.c_str(), write_flags, in_stat.st_mode);
+	if (outfd.fd() < 0)
+	{
+		se.operation = operation_t::file_open;
+		se.ec.assign(errno, system_category());
+		return;
+	}
+
+#if TORRENT_HAS_COPYFILE
+	if (!input_is_sparse)
+	{
+		// the the file isn't sparse use the system copy function (which
+		// expands sparse regions)
+		// this only works on 10.5
+		copyfile_state_t state = copyfile_state_alloc();
+		if (fcopyfile(infd.fd(), outfd.fd(), state, COPYFILE_ALL) < 0)
+		{
+			se.operation = operation_t::file_copy;
+			se.ec.assign(errno, system_category());
+		}
+		copyfile_state_free(state);
+		return;
+	}
+#endif
+
+	if (::ftruncate(outfd.fd(), in_stat.st_size) < 0)
+	{
+		se.operation = operation_t::file_truncate;
+		se.ec.assign(errno, system_category());
+		return;
+	}
+
+	copy_range_mode m;
+
+	if (input_is_sparse)
+	{
+#ifdef TORRENT_LINUX
+		// one ioctl() call can report many extents, whereas SEEK_DATA/
+		// SEEK_HOLE needs a pair of lseek() calls per extent boundary.
+		// FIEMAP support is independent of whether SEEK_HOLE is defined,
+		// so this is not gated on it.
+		if (copy_sparse_regions_fiemap(infd.fd(), outfd.fd(), in_stat.st_size, m, buf, se))
+			return;
+#endif
+
+#ifdef SEEK_HOLE
+		std::int64_t ret = 0;
+		off_t data_start = 0;
+		off_t data_end = 0;
+		for (;;)
+		{
+			data_start = ::lseek(infd.fd(), data_end, SEEK_DATA);
+			if (data_start == off_t(-1))
+			{
+				int const err = errno;
+				// if we SEEK_DATA while the file location is past the last
+				// non-sparse region (i.e. the file has been truncated without
+				// filled in, the end of the file may be a sparse region). In
+				// this case there's nothing left to copy, and we're done
+				if (err == ENXIO) return;
+				// if SEEK_DATA is not supported, fall back to plain copy
+				if (err == ENOTSUP) break;
+				se.operation = operation_t::file_seek;
+				se.ec.assign(err, system_category());
+				return;
+			}
+
+			data_end = ::lseek(infd.fd(), data_start, SEEK_HOLE);
+			if (data_end == off_t(-1))
+			{
+				int const err = errno;
+				if (err == ENOTSUP) break;
+				se.operation = operation_t::file_seek;
+				se.ec.assign(err, system_category());
+				return;
+			}
+
+			ret = copy_range(infd.fd(), outfd.fd(), data_start, data_end - data_start, m, buf, se);
+			if (ret <= 0) return;
+			if (data_end == in_stat.st_size) return;
+		}
+#endif
+	}
+
+	copy_range(infd.fd(), outfd.fd(), 0, in_stat.st_size, m, buf, se);
+}
+
+#endif // TORRENT_WINDOWS
+
+}
+}

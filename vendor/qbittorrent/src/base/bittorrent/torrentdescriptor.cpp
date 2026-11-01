@@ -1,0 +1,340 @@
+/*
+ * Bittorrent Client using Qt and libtorrent.
+ * Copyright (C) 2015-2024  Vladimir Golovnev <glassez@yandex.ru>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ *
+ * In addition, as a special exception, the copyright holders give permission to
+ * link this program with the OpenSSL project's "OpenSSL" library (or with
+ * modified versions of it that use the same license as the "OpenSSL" library),
+ * and distribute the linked executables. You must obey the GNU General Public
+ * License in all respects for all of the code used other than "OpenSSL".  If you
+ * modify file(s), you may extend this exception to your version of the file(s),
+ * but you are not obligated to do so. If you do not wish to do so, delete this
+ * exception statement from your version.
+ */
+
+#include "torrentdescriptor.h"
+
+#include <utility>
+#include <vector>
+
+#include <libtorrent/load_torrent.hpp>
+#include <libtorrent/magnet_uri.hpp>
+#include <libtorrent/torrent_info.hpp>
+#include <libtorrent/version.hpp>
+#include <libtorrent/write_resume_data.hpp>
+
+#include <QByteArray>
+#include <QRegularExpression>
+#include <QUrl>
+
+#include "base/path.h"
+#include "base/preferences.h"
+#include "base/utils/io.h"
+#include "infohash.h"
+#include "trackerentry.h"
+
+using namespace Qt::Literals::StringLiterals;
+
+namespace
+{
+    // BEP9 Extension for Peers to Send Metadata Files
+
+    bool isV1Hash(const QString &string)
+    {
+        // There are 2 representations for BitTorrent v1 info hash:
+        // 1. 40 chars hex-encoded string
+        //      == 20 (SHA-1 length in bytes) * 2 (each byte maps to 2 hex characters)
+        // 2. 32 chars Base32 encoded string
+        //      == 20 (SHA-1 length in bytes) * 1.6 (the efficiency of Base32 encoding)
+        const int V1_HEX_SIZE = SHA1Hash::length() * 2;
+        const int V1_BASE32_SIZE = SHA1Hash::length() * 1.6;
+        const qsizetype strSize = string.size();
+
+        return (((strSize == V1_HEX_SIZE) && !string.contains(QRegularExpression(u"[^0-9A-Fa-f]"_s)))
+                || ((strSize == V1_BASE32_SIZE) && !string.contains(QRegularExpression(u"[^2-7A-Za-z]"_s))));
+    }
+
+    bool isV2Hash(const QString &string)
+    {
+        // There are 1 representation for BitTorrent v2 info hash:
+        // 1. 64 chars hex-encoded string
+        //      == 32 (SHA-2 256 length in bytes) * 2 (each byte maps to 2 hex characters)
+        const int V2_HEX_SIZE = SHA256Hash::length() * 2;
+
+        return (string.size() == V2_HEX_SIZE) && !string.contains(QRegularExpression(u"[^0-9A-Fa-f]"_s));
+    }
+
+    lt::load_torrent_limits loadTorrentLimits()
+    {
+        const auto *pref = Preferences::instance();
+
+        lt::load_torrent_limits limits;
+        limits.max_buffer_size = static_cast<int>(pref->getTorrentFileSizeLimit());
+        limits.max_decode_depth = pref->getBdecodeDepthLimit();
+        limits.max_decode_tokens = pref->getBdecodeTokenLimit();
+
+        return limits;
+    }
+
+    bool isSupportedTrackerURL(const QString &url)
+    {
+        const QUrl trackerURL {url};
+        if (!trackerURL.isValid() || trackerURL.host().isEmpty())
+            return false;
+
+        const QString scheme = trackerURL.scheme();
+        return ((scheme == u"http") || (scheme == u"https") || (scheme == u"udp"));
+    }
+
+    void removeUnsupportedTrackers(lt::add_torrent_params &params)
+    {
+        if (params.trackers.empty())
+            return;
+
+        std::vector<std::string> trackers;
+        trackers.reserve(params.trackers.size());
+        std::vector<int> trackerTiers;
+        trackerTiers.reserve(params.trackers.size());
+
+        for (std::size_t i = 0; i < params.trackers.size(); ++i)
+        {
+            const QString tracker = QString::fromStdString(params.trackers[i]);
+            if (!isSupportedTrackerURL(tracker))
+                continue;
+
+            trackers.push_back(params.trackers[i]);
+            trackerTiers.push_back((i < params.tracker_tiers.size()) ? params.tracker_tiers[i] : 0);
+        }
+
+        params.trackers = std::move(trackers);
+        params.tracker_tiers = std::move(trackerTiers);
+    }
+}
+
+const int TORRENTDESCRIPTOR_TYPEID = qRegisterMetaType<BitTorrent::TorrentDescriptor>();
+
+nonstd::expected<BitTorrent::TorrentDescriptor, QString>
+BitTorrent::TorrentDescriptor::load(const QByteArray &data) noexcept
+try
+{
+    return TorrentDescriptor(lt::load_torrent_buffer(lt::span<const char>(data.data(), data.size()), loadTorrentLimits()));
+}
+catch (const lt::system_error &err)
+{
+#if LIBTORRENT_VERSION_NUM >= 20100
+    return nonstd::make_unexpected(QString::fromStdString(err.what()));
+#else
+    return nonstd::make_unexpected(QString::fromLocal8Bit(err.what()));
+#endif
+}
+
+nonstd::expected<BitTorrent::TorrentDescriptor, QString>
+BitTorrent::TorrentDescriptor::loadFromFile(const Path &path) noexcept
+try
+{
+    TorrentDescriptor torrentDescriptor {lt::load_torrent_file(path.toString().toStdString(), loadTorrentLimits())};
+    torrentDescriptor.m_source = path.data();
+    return torrentDescriptor;
+}
+catch (const lt::system_error &err)
+{
+#if LIBTORRENT_VERSION_NUM >= 20100
+    return nonstd::make_unexpected(QString::fromStdString(err.what()));
+#else
+    return nonstd::make_unexpected(QString::fromLocal8Bit(err.what()));
+#endif
+}
+
+nonstd::expected<BitTorrent::TorrentDescriptor, QString>
+BitTorrent::TorrentDescriptor::parse(const QString &str) noexcept
+try
+{
+    QString magnetURI = str;
+    if (isV2Hash(str))
+        magnetURI = u"magnet:?xt=urn:btmh:1220" + str; // 0x12 0x20 is the "multihash format" tag for the SHA-256 hashing scheme.
+    else if (isV1Hash(str))
+        magnetURI = u"magnet:?xt=urn:btih:" + str;
+
+    lt::add_torrent_params params = lt::parse_magnet_uri(magnetURI.toStdString());
+    removeUnsupportedTrackers(params);
+    TorrentDescriptor torrentDescriptor {std::move(params)};
+    torrentDescriptor.m_source = magnetURI;
+    return torrentDescriptor;
+}
+catch (const lt::system_error &err)
+{
+#if LIBTORRENT_VERSION_NUM >= 20100
+    return nonstd::make_unexpected(QString::fromStdString(err.what()));
+#else
+    return nonstd::make_unexpected(QString::fromLocal8Bit(err.what()));
+#endif
+}
+
+nonstd::expected<void, QString> BitTorrent::TorrentDescriptor::saveToFile(const Path &path) const
+try
+{
+    const lt::entry torrentEntry = lt::write_torrent_file(m_ltAddTorrentParams);
+    const nonstd::expected<void, QString> result = Utils::IO::saveToFile(path, torrentEntry);
+    if (!result)
+        return nonstd::make_unexpected(result.error());
+
+    return {};
+}
+catch (const lt::system_error &err)
+{
+#if LIBTORRENT_VERSION_NUM >= 20100
+    return nonstd::make_unexpected(QString::fromStdString(err.what()));
+#else
+    return nonstd::make_unexpected(QString::fromLocal8Bit(err.what()));
+#endif
+}
+
+nonstd::expected<QByteArray, QString> BitTorrent::TorrentDescriptor::saveToBuffer() const
+try
+{
+    const lt::entry torrentEntry = lt::write_torrent_file(m_ltAddTorrentParams);
+    // usually torrent size should be smaller than 1 MB,
+    // however there are >100 MB v2/hybrid torrent files out in the wild
+    QByteArray buffer;
+    buffer.reserve(1024 * 1024);
+    lt::bencode(std::back_inserter(buffer), torrentEntry);
+    return buffer;
+}
+catch (const lt::system_error &err)
+{
+#if LIBTORRENT_VERSION_NUM >= 20100
+    return nonstd::make_unexpected(QString::fromStdString(err.what()));
+#else
+    return nonstd::make_unexpected(QString::fromLocal8Bit(err.what()));
+#endif
+}
+
+BitTorrent::TorrentDescriptor::TorrentDescriptor(lt::add_torrent_params ltAddTorrentParams)
+    : m_ltAddTorrentParams {std::move(ltAddTorrentParams)}
+{
+    if (m_ltAddTorrentParams.ti && m_ltAddTorrentParams.ti->is_valid())
+    {
+        m_info.emplace(*m_ltAddTorrentParams.ti);
+#if LIBTORRENT_VERSION_NUM >= 20100
+        if (m_ltAddTorrentParams.creation_date > 0)
+            m_creationDate = QDateTime::fromSecsSinceEpoch(m_ltAddTorrentParams.creation_date);
+        m_creator = QString::fromStdString(m_ltAddTorrentParams.created_by);
+        m_comment = QString::fromStdString(m_ltAddTorrentParams.comment);
+#else
+        if (m_ltAddTorrentParams.ti->creation_date() > 0)
+            m_creationDate = QDateTime::fromSecsSinceEpoch(m_ltAddTorrentParams.ti->creation_date());
+        m_creator = QString::fromStdString(m_ltAddTorrentParams.ti->creator());
+        m_comment = QString::fromStdString(m_ltAddTorrentParams.ti->comment());
+#endif
+    }
+}
+
+BitTorrent::InfoHash BitTorrent::TorrentDescriptor::infoHash() const
+{
+#ifdef QBT_USES_LIBTORRENT2
+    return m_ltAddTorrentParams.info_hashes;
+#else
+    return m_ltAddTorrentParams.info_hash;
+#endif
+}
+
+QString BitTorrent::TorrentDescriptor::name() const
+{
+    return m_info ? m_info->name() : QString::fromStdString(m_ltAddTorrentParams.name);
+}
+
+QDateTime BitTorrent::TorrentDescriptor::creationDate() const
+{
+    return m_creationDate;
+}
+
+QString BitTorrent::TorrentDescriptor::creator() const
+{
+    return m_creator;
+}
+
+QString BitTorrent::TorrentDescriptor::comment() const
+{
+    return m_comment;
+}
+
+const std::optional<BitTorrent::TorrentInfo> &BitTorrent::TorrentDescriptor::info() const
+{
+    return m_info;
+}
+
+void BitTorrent::TorrentDescriptor::setTorrentInfo(TorrentInfo torrentInfo)
+{
+    if (!torrentInfo.isValid())
+    {
+        m_info.reset();
+        m_ltAddTorrentParams.ti.reset();
+    }
+    else
+    {
+        m_info = std::move(torrentInfo);
+        m_ltAddTorrentParams.ti = m_info->nativeInfo();
+#ifdef QBT_USES_LIBTORRENT2
+        m_ltAddTorrentParams.info_hashes = m_ltAddTorrentParams.ti->info_hashes();
+#else
+        m_ltAddTorrentParams.info_hash = m_ltAddTorrentParams.ti->info_hash();
+#endif
+    }
+}
+
+QList<BitTorrent::TrackerEntry> BitTorrent::TorrentDescriptor::trackers() const
+{
+    // libtorrent does not guarantee `add_torrent_params.trackers.size() == add_torrent_params.tracker_tiers.size()`
+
+    const qsizetype trackerCount = m_ltAddTorrentParams.trackers.size();
+    const qsizetype tierCount = m_ltAddTorrentParams.tracker_tiers.size();
+
+    QList<TrackerEntry> ret;
+    ret.reserve(trackerCount);
+
+    int tier = 0;
+    for (qsizetype i = 0; i < trackerCount; ++i)
+    {
+        const auto tracker = QString::fromStdString(m_ltAddTorrentParams.trackers[i]);
+        if (i < tierCount)
+            tier = m_ltAddTorrentParams.tracker_tiers[i];
+        ret.append({.url = tracker, .tier = tier});
+    }
+
+    return ret;
+}
+
+QList<QUrl> BitTorrent::TorrentDescriptor::urlSeeds() const
+{
+    QList<QUrl> urlSeeds;
+    urlSeeds.reserve(static_cast<decltype(urlSeeds)::size_type>(m_ltAddTorrentParams.url_seeds.size()));
+
+    for (const std::string &nativeURLSeed : m_ltAddTorrentParams.url_seeds)
+        urlSeeds.append(QUrl(QString::fromStdString(nativeURLSeed)));
+
+    return urlSeeds;
+}
+
+QString BitTorrent::TorrentDescriptor::source() const
+{
+    return m_source;
+}
+
+const libtorrent::add_torrent_params &BitTorrent::TorrentDescriptor::ltAddTorrentParams() const
+{
+    return m_ltAddTorrentParams;
+}

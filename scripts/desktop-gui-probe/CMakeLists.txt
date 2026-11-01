@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.16)
+project(MintTorrentGUIProbe LANGUAGES CXX)
+find_package(Qt6 6.6 REQUIRED COMPONENTS Widgets)
+add_library(minttorrent_gui_probe SHARED ../desktop-gui-probe.cpp)
+target_compile_features(minttorrent_gui_probe PRIVATE cxx_std_17)
+target_link_libraries(minttorrent_gui_probe PRIVATE Qt6::Widgets)
+set_target_properties(minttorrent_gui_probe PROPERTIES PREFIX "" OUTPUT_NAME probe)

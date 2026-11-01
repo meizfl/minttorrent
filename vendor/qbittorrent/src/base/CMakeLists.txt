@@ -1,0 +1,325 @@
+add_library(qbt_base STATIC
+    # headers
+    3rdparty/expected.hpp
+    addtorrentmanager.h
+    algorithm.h
+    applicationcomponent.h
+    asyncfilestorage.h
+    bittorrent/addtorrentparams.h
+    bittorrent/announcetimepoint.h
+    bittorrent/bandwidthscheduler.h
+    bittorrent/bencoderesumedatastorage.h
+    bittorrent/cachestatus.h
+    bittorrent/categoryoptions.h
+    bittorrent/common.h
+    bittorrent/customstorage.h
+    bittorrent/dbresumedatastorage.h
+    bittorrent/downloadpathoption.h
+    bittorrent/downloadpriority.h
+    bittorrent/extensiondata.h
+    bittorrent/filesearcher.h
+    bittorrent/filterparserthread.h
+    bittorrent/infohash.h
+    bittorrent/loadtorrentparams.h
+    bittorrent/ltqbitarray.h
+    bittorrent/lttypecast.h
+    bittorrent/nativesessionextension.h
+    bittorrent/nativetorrentextension.h
+    bittorrent/peeraddress.h
+    bittorrent/peerinfo.h
+    bittorrent/portforwarderimpl.h
+    bittorrent/resumedatastorage.h
+    bittorrent/session.h
+    bittorrent/sessionimpl.h
+    bittorrent/sessionstatus.h
+    bittorrent/sharelimits.h
+    bittorrent/speedmonitor.h
+    bittorrent/sslparameters.h
+    bittorrent/torrent.h
+    bittorrent/torrentannouncestatus.h
+    bittorrent/torrentcontenthandler.h
+    bittorrent/torrentcontentlayout.h
+    bittorrent/torrentcontentremoveoption.h
+    bittorrent/torrentcontentremover.h
+    bittorrent/torrentcreationmanager.h
+    bittorrent/torrentcreationtask.h
+    bittorrent/torrentcreator.h
+    bittorrent/torrentdescriptor.h
+    bittorrent/torrentimpl.h
+    bittorrent/torrentinfo.h
+    bittorrent/tracker.h
+    bittorrent/trackerentry.h
+    bittorrent/trackerentrystatus.h
+    concepts/explicitlyconvertibleto.h
+    concepts/stringable.h
+    digest32.h
+    exceptions.h
+    freediskspacechecker.h
+    global.h
+    http/asyncfilesender.h
+    http/connection.h
+    http/constants.h
+    http/environment.h
+    http/header.h
+    http/headermap.h
+    http/httperror.h
+    http/irequesthandler.h
+    http/rangerequest.h
+    http/request.h
+    http/requestparser.h
+    http/response.h
+    http/responseserialization.h
+    http/responsewriter.h
+    http/responsewriterimpl.h
+    http/server.h
+    indexrange.h
+    interfaces/iapplication.h
+    keyvaluedatastorage.h
+    logger.h
+    minttorrentvpn.h
+    net/dnsupdater.h
+    net/downloadhandlerimpl.h
+    net/downloadmanager.h
+    net/geoipdatabase.h
+    net/geoipmanager.h
+    net/portforwarder.h
+    net/proxyconfigurationmanager.h
+    net/proxytype.h
+    net/reverseresolution.h
+    net/smtpclient.h
+    net/smtpencryptiontype.h
+    orderedset.h
+    path.h
+    pathfwd.h
+    preferences.h
+    profile.h
+    profile_p.h
+    rss/feed_serializer.h
+    rss/rss_article.h
+    rss/rss_autodownloader.h
+    rss/rss_autodownloadrule.h
+    rss/rss_feed.h
+    rss/rss_folder.h
+    rss/rss_item.h
+    rss/rss_parser.h
+    rss/rss_session.h
+    search/searchdownloadhandler.h
+    search/searchhandler.h
+    search/searchpluginmanager.h
+    settingsstorage.h
+    tag.h
+    tagset.h
+    torrentfileguard.h
+    torrentfileswatcher.h
+    torrentfilter.h
+    types.h
+    unicodestrings.h
+    utils/apikey.h
+    utils/bytearray.h
+    utils/compare.h
+    utils/datetime.h
+    utils/dict.h
+    utils/foreignapps.h
+    utils/fs.h
+    utils/gzip.h
+    utils/hashvalue.h
+    utils/io.h
+    utils/misc.h
+    utils/net.h
+    utils/number.h
+    utils/os.h
+    utils/password.h
+    utils/random.h
+    utils/sslkey.h
+    utils/string.h
+    utils/thread.h
+    utils/version.h
+    version.h
+
+    # sources
+    addtorrentmanager.cpp
+    applicationcomponent.cpp
+    asyncfilestorage.cpp
+    bittorrent/addtorrentparams.cpp
+    bittorrent/bandwidthscheduler.cpp
+    bittorrent/bencoderesumedatastorage.cpp
+    bittorrent/categoryoptions.cpp
+    bittorrent/customstorage.cpp
+    bittorrent/dbresumedatastorage.cpp
+    bittorrent/downloadpathoption.cpp
+    bittorrent/downloadpriority.cpp
+    bittorrent/filesearcher.cpp
+    bittorrent/filterparserthread.cpp
+    bittorrent/infohash.cpp
+    bittorrent/ltqbitarray.cpp
+    bittorrent/nativesessionextension.cpp
+    bittorrent/nativetorrentextension.cpp
+    bittorrent/peeraddress.cpp
+    bittorrent/peerinfo.cpp
+    bittorrent/portforwarderimpl.cpp
+    bittorrent/resumedatastorage.cpp
+    bittorrent/sessionimpl.cpp
+    bittorrent/speedmonitor.cpp
+    bittorrent/sslparameters.cpp
+    bittorrent/torrent.cpp
+    bittorrent/torrentcontenthandler.cpp
+    bittorrent/torrentcontentremover.cpp
+    bittorrent/torrentcreationmanager.cpp
+    bittorrent/torrentcreationtask.cpp
+    bittorrent/torrentcreator.cpp
+    bittorrent/torrentdescriptor.cpp
+    bittorrent/torrentimpl.cpp
+    bittorrent/torrentinfo.cpp
+    bittorrent/tracker.cpp
+    bittorrent/trackerentry.cpp
+    bittorrent/trackerentrystatus.cpp
+    exceptions.cpp
+    freediskspacechecker.cpp
+    http/asyncfilesender.cpp
+    http/connection.cpp
+    http/httperror.cpp
+    http/rangerequest.cpp
+    http/requestparser.cpp
+    http/responseserialization.cpp
+    http/responsewriterimpl.cpp
+    http/server.cpp
+    keyvaluedatastorage.cpp
+    logger.cpp
+    minttorrentvpn.cpp
+    net/dnsupdater.cpp
+    net/downloadhandlerimpl.cpp
+    net/downloadmanager.cpp
+    net/geoipdatabase.cpp
+    net/geoipmanager.cpp
+    net/portforwarder.cpp
+    net/proxyconfigurationmanager.cpp
+    net/reverseresolution.cpp
+    net/smtpclient.cpp
+    path.cpp
+    preferences.cpp
+    profile.cpp
+    profile_p.cpp
+    rss/feed_serializer.cpp
+    rss/rss_article.cpp
+    rss/rss_autodownloader.cpp
+    rss/rss_autodownloadrule.cpp
+    rss/rss_feed.cpp
+    rss/rss_folder.cpp
+    rss/rss_item.cpp
+    rss/rss_parser.cpp
+    rss/rss_session.cpp
+    search/searchdownloadhandler.cpp
+    search/searchhandler.cpp
+    search/searchpluginmanager.cpp
+    settingsstorage.cpp
+    tag.cpp
+    tagset.cpp
+    torrentfileguard.cpp
+    torrentfileswatcher.cpp
+    torrentfilter.cpp
+    utils/apikey.cpp
+    utils/bytearray.cpp
+    utils/compare.cpp
+    utils/datetime.cpp
+    utils/foreignapps.cpp
+    utils/fs.cpp
+    utils/gzip.cpp
+    utils/io.cpp
+    utils/misc.cpp
+    utils/net.cpp
+    utils/number.cpp
+    utils/os.cpp
+    utils/password.cpp
+    utils/random.cpp
+    utils/sslkey.cpp
+    utils/string.cpp
+    utils/thread.cpp
+    utils/version.cpp
+)
+
+target_link_libraries(qbt_base
+    PRIVATE
+        OpenSSL::Crypto
+        OpenSSL::SSL
+        # find whatever zlib target that exists while being compatible with both
+        # FindZLIB (from cmake) and zlib own scripts
+        $<IF:$<TARGET_EXISTS:ZLIB::ZLIB>,ZLIB::ZLIB,ZLIB::ZLIBSTATIC>
+    PUBLIC
+        LibtorrentRasterbar::torrent-rasterbar
+        Qt::Core
+        Qt::CorePrivate
+        Qt::Network
+        Qt::Sql
+        Qt::Xml
+        qbt_common_cfg
+)
+
+if (NOT WIN32)
+    find_library(MINTTORRENT_AWG_LIBRARY NAMES minttorrent_awg REQUIRED)
+    target_link_libraries(qbt_base PRIVATE ${MINTTORRENT_AWG_LIBRARY})
+endif()
+if (DEFINED MINTTORRENT_VERSION)
+    target_compile_definitions(qbt_base PUBLIC MINTTORRENT_VERSION=\"${MINTTORRENT_VERSION}\")
+endif()
+
+if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    find_library(AppKit_LIBRARY AppKit)
+    find_library(Carbon_LIBRARY Carbon)
+    find_library(IOKit_LIBRARY IOKit)
+
+    target_link_libraries(qbt_base PRIVATE
+        ${AppKit_LIBRARY}
+        ${Carbon_LIBRARY}
+        ${IOKit_LIBRARY}
+    )
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    include(CheckSymbolExists)
+    check_symbol_exists(getrandom "sys/random.h" HAVE_GETRANDOM)
+
+    if (HAVE_GETRANDOM)
+        target_compile_definitions(qbt_base PUBLIC QBT_USES_GETRANDOM)
+    endif()
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    target_sources(qbt_base PRIVATE
+        utils/reg.h
+        utils/reg.cpp
+    )
+    target_link_libraries(qbt_base PRIVATE iphlpapi powrprof)
+endif()
+
+if (NOT GUI)
+    target_compile_definitions(qbt_base PUBLIC DISABLE_GUI)
+endif()
+
+if (NOT WEBUI)
+    target_compile_definitions(qbt_base PUBLIC DISABLE_WEBUI)
+endif()
+
+if (DBUS)
+    target_link_libraries(qbt_base PUBLIC Qt::DBus)
+endif()
+
+if (PLUGINS)
+    add_subdirectory(3rdparty/lua)
+    set_target_properties(qbt_lua PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES $<TARGET_PROPERTY:qbt_lua,INTERFACE_INCLUDE_DIRECTORIES>)
+
+    add_subdirectory(3rdparty/luabridge)
+    set_target_properties(qbt_luabridge PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES $<TARGET_PROPERTY:qbt_luabridge,INTERFACE_INCLUDE_DIRECTORIES>)
+
+    target_compile_definitions(qbt_base PUBLIC ENABLE_PLUGINS)
+    target_link_libraries(qbt_base PRIVATE qbt_lua qbt_luabridge)
+
+    target_sources(qbt_base PRIVATE
+            plugins/luaclasses.h
+            plugins/luaclasses.cpp
+            plugins/luafunctions.h
+            plugins/luafunctions.cpp
+            plugins/luanamespace.h
+            plugins/luastack.h
+            plugins/plugin.h
+            plugins/plugin.cpp
+            plugins/pluginsengine.h
+            plugins/pluginsengine.cpp
+            plugins/pluginversion.h
+    )
+endif()

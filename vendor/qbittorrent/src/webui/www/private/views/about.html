@@ -1,0 +1,34 @@
+<div id="aboutAboutContent" class="aboutTabContent">
+    <img src="images/minttorrent-logo.svg" style="height: 3em;" alt="MintTorrent logo">
+    <h3 id="minttorrentVersion">MintTorrent</h3>
+    <p>Userspace BitTorrent client with an isolated gVisor Netstack and AmneziaWG transport.</p>
+    <p>Source and third-party license notices are included with this distribution.</p>
+</div>
+
+<div id="aboutSoftwareUsedContent" class="aboutTabContent invisible">
+    <p>Open-source components used by this build:</p>
+    <table style="margin: 0 auto;">
+        <tbody>
+            <tr><td style="text-align: right;">Qt:</td><td id="qtVersion"></td></tr>
+            <tr><td style="text-align: right;">BitTorrent engine:</td><td id="libtorrentVersion"></td></tr>
+            <tr><td style="text-align: right;">Boost:</td><td id="boostVersion"></td></tr>
+            <tr><td style="text-align: right;">OpenSSL:</td><td id="opensslVersion"></td></tr>
+            <tr><td style="text-align: right;">zlib:</td><td id="zlibVersion"></td></tr>
+        </tbody>
+    </table>
+    <p>Refer to the licenses directory in the distribution for license texts and notices.</p>
+</div>
+
+<script>
+    "use strict";
+    (() => {
+        const version = window.parent.qBittorrent.Cache.qbtVersion.get();
+        const buildInfo = window.parent.qBittorrent.Cache.buildInfo.get();
+        document.getElementById("minttorrentVersion").textContent = `MintTorrent ${version} (${buildInfo.bitness}-bit)`;
+        document.getElementById("qtVersion").textContent = buildInfo.qt;
+        document.getElementById("libtorrentVersion").textContent = buildInfo.libtorrent;
+        document.getElementById("boostVersion").textContent = buildInfo.boost;
+        document.getElementById("opensslVersion").textContent = buildInfo.openssl;
+        document.getElementById("zlibVersion").textContent = buildInfo.zlib;
+    })();
+</script>

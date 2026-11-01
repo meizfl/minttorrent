@@ -1,0 +1,222 @@
+name: MacOS
+
+on:
+   push:
+      branches: [ RC_2_1, master ]
+      paths-ignore:
+         - bindings/python/**
+   pull_request:
+      paths-ignore:
+         - bindings/python/**
+
+concurrency:
+   group: ${{ github.ref }}-${{ github.workflow }}-${{ github.event_name }}
+   cancel-in-progress: true
+
+env:
+   HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+   HOMEBREW_NO_AUTO_UPDATE: 1
+   # this is required by libdatachannel, which is specifying a too old version of cmake
+   CMAKE_POLICY_VERSION_MINIMUM: 3.5
+
+jobs:
+
+   test:
+      name: Tests
+      runs-on: macos-15
+
+      strategy:
+         matrix:
+            config: [ webtorrent=off crypto=built-in, webtorrent=on deprecated-functions=off ]
+
+      steps:
+      - name: checkout
+        uses: actions/checkout@v6
+        with:
+           submodules: recursive
+           fetch-depth: 1
+           filter: tree:0
+
+      - uses: Chocobo1/setup-ccache-action@v1
+        with:
+          override_cache_key: ccache-macos-test-${{ matrix.config }}-${{ github.base_ref }}
+          ccache_options: |
+            max_size=1G
+
+      - name: install boost
+        run: |
+          brew install boost-build boost openssl@3
+          pip3 install websockets --break-system-packages
+          echo "using darwin ;" >>~/user-config.jam
+          echo "OPENSSL_ROOT=$(brew --prefix openssl@3)" >>"$GITHUB_ENV"
+
+      - name: disable UPnP test
+        # test_upnp needs to connect to its web_server over the host's LAN
+        # address; macOS's local network privacy permission has no way to
+        # be granted on an unattended CI runner, so it always fails here.
+        # mark it explicit (excluded from the default build) for this CI
+        # run only, rather than disabling it for other platforms or local
+        # macOS development.
+        run: echo 'explicit test_upnp ;' >>test/Jamfile
+
+      - name: build and run tests
+        run: (cd test; b2 ${{ matrix.config }} -l400 warnings-as-errors=on debug-iterators=on invariant-checks=full asserts=on deterministic-tests openssl-include="$OPENSSL_ROOT/include" openssl-lib="$OPENSSL_ROOT/lib")
+
+      - name: run tests (flaky)
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 30
+          retry_wait_seconds: 1
+          max_attempts: 3
+          command: (cd test; b2 ${{ matrix.config }} -l400 warnings-as-errors=on debug-iterators=on invariant-checks=full asserts=on openssl-include="$OPENSSL_ROOT/include" openssl-lib="$OPENSSL_ROOT/lib")
+
+
+   sim:
+      name: Simulations
+      runs-on: macos-15
+
+      steps:
+      - name: checkout
+        uses: actions/checkout@v6
+        with:
+           submodules: true
+           fetch-depth: 1
+           filter: tree:0
+
+      - uses: Chocobo1/setup-ccache-action@v1
+        with:
+          override_cache_key: ccache-macos-sim-${{ github.base_ref }}
+          ccache_options: |
+            max_size=1G
+
+      - name: install boost
+        run: |
+          brew install boost-build boost openssl@3
+          echo "using darwin ;" >>~/user-config.jam
+          echo "OPENSSL_ROOT=$(brew --prefix openssl@3)" >>"$GITHUB_ENV"
+
+      - name: build and run simulations
+        run: |
+          cd simulation
+          b2 -l400 debug-iterators=on invariant-checks=full asserts=on openssl-include="$OPENSSL_ROOT/include" openssl-lib="$OPENSSL_ROOT/lib"
+
+
+   build:
+      name: Build
+      runs-on: macos-15
+
+      strategy:
+         matrix:
+            config: [ webtorrent=off crypto=built-in define=_LIBCPP_REMOVE_TRANSITIVE_INCLUDES=1, webtorrent=off release ]
+
+      steps:
+      - name: checkout
+        uses: actions/checkout@v6
+        with:
+           submodules: true
+           fetch-depth: 1
+           filter: tree:0
+
+      - uses: Chocobo1/setup-ccache-action@v1
+        with:
+          override_cache_key: ccache-macos-build-${{ matrix.config }}-${{ github.base_ref }}
+          ccache_options: |
+            max_size=1G
+
+      - name: install boost
+        run: |
+          brew install boost-build boost openssl@3
+          echo "using darwin ;" >>~/user-config.jam
+          echo "OPENSSL_ROOT=$(brew --prefix openssl@3)" >>"$GITHUB_ENV"
+
+      - name: build library
+        run: |
+          b2 ${{ matrix.config }} -l400 warnings-as-errors=on openssl-include="$OPENSSL_ROOT/include" openssl-lib="$OPENSSL_ROOT/lib"
+
+
+   cmake:
+      name: cmake
+      runs-on: macos-15
+
+      steps:
+      - name: checkout
+        uses: actions/checkout@v6
+        with:
+           submodules: recursive
+           fetch-depth: 1
+           filter: tree:0
+
+      - uses: Chocobo1/setup-ccache-action@v1
+        with:
+          override_cache_key: ccache-macos-cmake-${{ github.base_ref }}
+          ccache_options: |
+            max_size=1G
+
+      - name: install boost
+        run: |
+          brew install boost openssl@3 ninja
+          pip3 install websockets --break-system-packages
+          echo "OPENSSL_ROOT=$(brew --prefix openssl@3)" >>"$GITHUB_ENV"
+
+      - name: cmake configure
+        run: |
+          cmake -B build-cmake -GNinja -DCMAKE_BUILD_TYPE=Debug -Dbuild_tests=ON -Dbuild_examples=ON -Dbuild_tools=ON -Dwebtorrent=on -Dasserts=on -DOPENSSL_ROOT_DIR="$OPENSSL_ROOT"
+
+      - name: cmake build
+        run: cmake --build build-cmake
+
+      - name: ctest
+        run: |
+          cd build-cmake
+          # test_rtc hangs on macOS specifically when built via cmake (it
+          # passes when built via b2 on the same runner); excluded pending
+          # investigation into the cmake-specific cause
+          #
+          # test_upnp needs to connect to its web_server over the host's LAN
+          # address; macOS's local network privacy permission has no way to
+          # be granted on an unattended CI runner, so it always fails here.
+          # CMakeLists.txt globs all test_*.cpp into ctest unconditionally
+          # (no per-target "explicit" like the b2 Jamfile), so it has to be
+          # excluded here instead.
+          ctest --output-on-failure --exclude-regex '^(test_rtc|test_upnp)$'
+
+
+   ios_build:
+      name: Build iOS
+      runs-on: macos-15
+
+      steps:
+      - name: checkout
+        uses: actions/checkout@v6
+        with:
+           submodules: true
+           fetch-depth: 1
+           filter: tree:0
+
+      - name: install boost
+        run: |
+          brew install boost-build boost openssl@3
+
+      - name: user-config
+        run: |
+          echo "using darwin : ios_sim : clang++ : <compileflags>-Wno-deprecated-declarations
+          <compileflags>\"-isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk\"
+          <compileflags>-mios-simulator-version-min=12
+          <compileflags>-fobjc-abi-version=2
+          <linkflags>\"-isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk\"
+          <linkflags>-mios-simulator-version-min=12
+          <linkflags>-fobjc-abi-version=2 ;" >>~/user-config.jam;
+
+          echo "using darwin : ios : clang++ : <compileflags>-Wno-deprecated-declarations
+          <compileflags>\"-isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk\"
+          <compileflags>-mios-version-min=12
+          <compileflags>\"-arch arm64\"
+          <compileflags>-fobjc-abi-version=2
+          <linkflags>\"-isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk\"
+          <linkflags>-mios-version-min=12
+          <linkflags>\"-arch arm64\"
+          <linkflags>-fobjc-abi-version=2 ;" >>~/user-config.jam;
+
+      - name: build library
+        run: |
+          b2 -l400 cxxstd=14 target-os=iphone crypto=built-in darwin-ios darwin-ios_sim address-model=64 link=static webtorrent=off

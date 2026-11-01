@@ -1,0 +1,45 @@
+name: Documentation
+
+on:
+   push:
+      branches: [ RC_2_1, master ]
+   pull_request:
+
+concurrency:
+   group: ${{ github.ref }}-${{ github.workflow }}-${{ github.event_name }}
+   cancel-in-progress: true
+
+jobs:
+
+   docs:
+      name: Docs
+      runs-on: ubuntu-24.04
+
+      steps:
+      - name: checkout
+        uses: actions/checkout@v6
+        with:
+           fetch-depth: 1
+           filter: tree:0
+
+      - name: update package lists
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 update
+
+      - name: install dependencies
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3-docutils python3-pygments python3-pil gsfonts inkscape icoutils graphviz hunspell imagemagick
+          python3 -m pip install aafigure
+          ~/.local/bin/aafigure --version
+
+      - name: spell-check
+        run: |
+          cd docs
+          make AAFIGURE=~/.local/bin/aafigure RST2HTML=rst2html spell-check html
+
+      - name: build docs
+        run: |
+          cd docs
+          make AAFIGURE=~/.local/bin/aafigure RST2HTML=rst2html

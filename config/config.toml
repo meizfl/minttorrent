@@ -1,0 +1,15 @@
+# Copy to config.toml and edit. Relative paths are resolved from this file.
+
+[vpn]
+config = "vpn/default.conf"
+autostart = false
+
+[torrent]
+webui_port = 4101
+# 0 chooses one port from 10000..65535 at each service start.
+listen_port = 0
+
+[torrent.storage]
+# Empty means <qBittorrent profile>/downloads. For systemd custom paths outside
+# its allowed write paths, add a ReadWritePaths service override (see README.md).
+download_path = ""

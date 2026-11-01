@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="320" viewBox="0 0 520 320">
+<defs><linearGradient id="b" x2="1" y2="1"><stop stop-color="#102d21"/><stop offset="1" stop-color="#075e45"/></linearGradient></defs>
+<rect width="520" height="320" rx="20" fill="url(#b)"/>
+<circle cx="475" cy="30" r="150" fill="#0ce495" opacity=".07"/>
+<rect x="220" y="48" width="80" height="80" rx="20" fill="#0ce495"/>
+<path d="M238 109V67h12l10 15 10-15h12v42h-12V88l-10 15-10-15v21z" fill="#fff"/>
+<text x="260" y="185" text-anchor="middle" font-family="sans-serif" font-size="38" font-weight="700" fill="#f0fff7">MintTorrent</text>
+<text x="260" y="220" text-anchor="middle" font-family="sans-serif" font-size="15" fill="#9bdcbd">AmneziaWG · gVisor Netstack</text>
+<path d="M200 252h120" stroke="#0ce495" stroke-width="3" stroke-linecap="round"/>
+</svg>

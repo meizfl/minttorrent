@@ -1,0 +1,22 @@
+<div class="toolbarTabs">
+    <ul id="aboutTabs" class="tab-menu">
+        <li id="aboutAboutLink" class="selected"><a>About MintTorrent</a></li>
+        <li id="aboutSoftwareUsedLink"><a>Components</a></li>
+    </ul>
+    <div class="clear"></div>
+</div>
+
+<script>
+    "use strict";
+    (() => {
+        MochaUI.initializeTabs("aboutTabs");
+        const showContent = (element) => {
+            for (const content of document.querySelectorAll(".aboutTabContent"))
+                content.classList.toggle("invisible", content !== element);
+        };
+        document.getElementById("aboutAboutLink").addEventListener("click", () =>
+            showContent(document.getElementById("aboutAboutContent")));
+        document.getElementById("aboutSoftwareUsedLink").addEventListener("click", () =>
+            showContent(document.getElementById("aboutSoftwareUsedContent")));
+    })();
+</script>

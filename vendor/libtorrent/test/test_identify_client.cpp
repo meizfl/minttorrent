@@ -1,0 +1,39 @@
+/*
+
+Copyright (c) 2015, 2017, 2020-2021, Arvid Norberg
+All rights reserved.
+
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
+*/
+
+#include "test.hpp"
+#include "libtorrent/identify_client.hpp"
+
+using namespace lt;
+
+TORRENT_TEST(identify_client)
+{
+	TEST_EQUAL(aux::identify_client_impl(peer_id("-AZ123B-............")), "Azureus 1.2.3.11");
+	TEST_EQUAL(aux::identify_client_impl(peer_id("-AZ1230-............")), "Azureus 1.2.3");
+	TEST_EQUAL(aux::identify_client_impl(peer_id("S123--..............")), "Shadow 1.2.3");
+	TEST_EQUAL(aux::identify_client_impl(peer_id("S\x1\x2\x3....\0...........")), "Shadow 1.2.3");
+	TEST_EQUAL(aux::identify_client_impl(peer_id("M1-2-3--............")), "Mainline 1.2.3");
+	TEST_EQUAL(aux::identify_client_impl(peer_id("\0\0\0\0\0\0\0\0\0\0\0\0........")), "Generic");
+	TEST_EQUAL(aux::identify_client_impl(peer_id("-xx1230-............")), "xx 1.2.3");
+
+	// Transmission's legacy "-TRXYYR-" encoding (0.80 through 3.00) must
+	// not be parsed as three separate Azureus-style version components.
+	TEST_EQUAL(aux::identify_client_impl(peer_id("-TR2210-............")), "Transmission 2.21.0");
+	TEST_EQUAL(aux::identify_client_impl(peer_id("-TR2220-............")), "Transmission 2.22.0");
+	TEST_EQUAL(aux::identify_client_impl(peer_id("-TR2830-............")), "Transmission 2.83.0");
+	TEST_EQUAL(aux::identify_client_impl(peer_id("-TR3000-............")), "Transmission 3.0.0");
+	TEST_EQUAL(aux::identify_client_impl(peer_id("-TR300Z-............")), "Transmission 3.0.0.35");
+	TEST_EQUAL(aux::identify_client_impl(peer_id("-TR300X-............")), "Transmission 3.0.0.33");
+
+	// a non-digit, non-uppercase-letter suffix is not a valid legacy
+	// Transmission encoding and must not be parsed as one.
+	TEST_EQUAL(aux::identify_client_impl(peer_id("-TR300!-............")),
+		"Unknown [-TR300!-............]");
+}
+

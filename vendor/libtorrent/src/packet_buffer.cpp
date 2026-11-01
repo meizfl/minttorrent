@@ -1,0 +1,181 @@
+/*
+
+Copyright (c) 2010-2012, 2014, 2016-2017, 2019-2020, Arvid Norberg
+Copyright (c) 2017, Alden Torres
+All rights reserved.
+
+You may use, distribute and modify this code under the terms of the BSD license,
+see LICENSE file.
+*/
+
+#include "libtorrent/aux_/packet_buffer.hpp"
+#include "libtorrent/assert.hpp"
+#include "libtorrent/aux_/invariant_check.hpp"
+
+namespace libtorrent {
+namespace aux {
+
+	bool compare_less_wrap(std::uint32_t lhs, std::uint32_t rhs
+		, std::uint32_t mask);
+
+	namespace {
+
+		constexpr packet_buffer::index_type index_mask = 0xffff;
+
+		bool is_in_range(packet_buffer::index_type const idx,
+			packet_buffer::index_type const first,
+			packet_buffer::index_type const capacity)
+		{
+			TORRENT_ASSERT_VAL(idx <= index_mask, idx);
+			return ((idx - first) & index_mask) < capacity;
+		}
+
+	}
+
+#if TORRENT_USE_INVARIANT_CHECKS
+	void packet_buffer::check_invariant() const
+	{
+		int count = 0;
+		for (index_type i = 0; i < m_capacity; ++i)
+		{
+			count += m_storage[i] ? 1 : 0;
+		}
+		TORRENT_ASSERT(count == m_size);
+	}
+#endif
+
+	void packet_buffer::grow_to_include(index_type idx)
+	{
+		if (compare_less_wrap(idx, m_first, 0xffff))
+		{
+			// Index comes before m_first. If we have room, we can simply
+			// adjust m_first backward.
+
+			std::uint32_t free_space = 0;
+
+			for (index_type i = (m_first - 1) & (m_capacity - 1); i != (m_first & (m_capacity - 1));
+				 i = (i - 1) & (m_capacity - 1))
+			{
+				if (m_storage[i & (m_capacity - 1)])
+					break;
+				++free_space;
+			}
+
+			if (((m_first - idx) & 0xffff) > free_space)
+				reserve(((m_first - idx) & 0xffff) + m_capacity - free_space);
+
+			m_first = idx;
+		}
+		else
+		{
+			// idx is beyond the current window; grow forward to include it.
+			// (idx - m_first) & 0xffff is the wrapped distance to idx, which
+			// stays correct even once m_first + m_capacity overflows past
+			// 0xffff.
+			reserve(((idx - m_first) & 0xffff) + 1);
+		}
+	}
+
+	packet_ptr packet_buffer::insert(index_type idx, packet_ptr value)
+	{
+		INVARIANT_CHECK;
+
+		TORRENT_ASSERT_VAL(idx <= 0xffff, idx);
+		// you're not allowed to insert NULLs!
+		TORRENT_ASSERT(value);
+
+		if (!value) return remove(idx);
+
+		if (m_size != 0)
+		{
+			if (!is_in_range(idx, m_first, m_capacity))
+				grow_to_include(idx);
+			if (compare_less_wrap(m_last, (idx + 1) & 0xffff, 0xffff))
+				m_last = (idx + 1) & 0xffff;
+		}
+		else
+		{
+			m_first = idx;
+			m_last = (idx + 1) & 0xffff;
+		}
+
+		if (m_capacity == 0) reserve(16);
+
+		packet_ptr old_value = std::move(m_storage[idx & (m_capacity - 1)]);
+		m_storage[idx & (m_capacity - 1)] = std::move(value);
+
+		if (m_size == 0) m_first = idx;
+		// if we're just replacing an old value, the number
+		// of elements in the buffer doesn't actually increase
+		if (!old_value) ++m_size;
+
+		TORRENT_ASSERT_VAL(m_first <= 0xffff, m_first);
+		return old_value;
+	}
+
+	packet* packet_buffer::at(index_type idx) const
+	{
+		INVARIANT_CHECK;
+		if (!is_in_range(idx, m_first, m_capacity))
+			return nullptr;
+
+		std::size_t const mask = m_capacity - 1;
+		return m_storage[idx & mask].get();
+	}
+
+	void packet_buffer::reserve(std::uint32_t size)
+	{
+		INVARIANT_CHECK;
+		TORRENT_ASSERT_VAL(size <= 0xffff, size);
+		std::uint32_t new_size = m_capacity == 0 ? 16 : m_capacity;
+
+		while (new_size < size)
+			new_size <<= 1;
+
+		auto new_storage = aux::make_unique<packet_ptr[], index_type>(new_size);
+
+		for (index_type i = m_first; i < (m_first + m_capacity); ++i)
+			new_storage[i & (new_size - 1)] = std::move(m_storage[i & (m_capacity - 1)]);
+
+		m_storage = std::move(new_storage);
+		m_capacity = new_size;
+	}
+
+	packet_ptr packet_buffer::remove(index_type idx)
+	{
+		INVARIANT_CHECK;
+		if (!is_in_range(idx, m_first, m_capacity))
+			return {};
+
+		std::size_t const mask = m_capacity - 1;
+		packet_ptr old_value = std::move(m_storage[idx & mask]);
+		m_storage[idx & mask].reset();
+
+		if (old_value)
+		{
+			--m_size;
+			if (m_size == 0) m_last = m_first;
+		}
+
+		if (idx == m_first && m_size != 0)
+		{
+			++m_first;
+			for (index_type i = 0; i < m_capacity; ++i, ++m_first)
+				if (m_storage[m_first & mask]) break;
+			m_first &= 0xffff;
+		}
+
+		if (((idx + 1) & 0xffff) == m_last && m_size != 0)
+		{
+			--m_last;
+			for (index_type i = 0; i < m_capacity; ++i, --m_last)
+				if (m_storage[m_last & mask]) break;
+			++m_last;
+			m_last &= 0xffff;
+		}
+
+		TORRENT_ASSERT_VAL(m_first <= 0xffff, m_first);
+		return old_value;
+	}
+}
+}
